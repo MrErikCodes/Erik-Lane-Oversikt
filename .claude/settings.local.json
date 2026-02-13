@@ -9,7 +9,13 @@
       "Bash(wc:*)",
       "Bash(npm ls:*)",
       "Bash(node -e:*)",
-      "Bash(npx vitest run)"
+      "Bash(npx vitest run)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run seed:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx next build:*)",
+      "Bash(npm run scrape:fp:*)",
+      "Bash(npx tsx:*)"
     ]
   }
 }
