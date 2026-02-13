@@ -2,14 +2,15 @@ import { join } from 'path'
 import { Low } from 'lowdb'
 import { JSONFile } from 'lowdb/node'
 import { v4 as uuidv4 } from 'uuid'
-import type { Database, Loan, Payment, Scenario, RateChange } from './types'
-import type { LoanInput, PaymentInput, ScenarioInput, RateChangeInput } from './schemas'
+import type { Database, Loan, Payment, Scenario, RateChange, Investment } from './types'
+import type { LoanInput, PaymentInput, ScenarioInput, RateChangeInput, InvestmentInput } from './schemas'
 
 const defaultData: Database = {
   loans: [],
   payments: [],
   scenarios: [],
   rateChanges: [],
+  investments: [],
 }
 
 let dbInstance: Low<Database> | null = null
@@ -20,6 +21,12 @@ export async function getDb(): Promise<Low<Database>> {
   const adapter = new JSONFile<Database>(file)
   const db = new Low(adapter, defaultData)
   await db.read()
+  // Merge defaults for any missing keys (e.g. after adding investments)
+  for (const key of Object.keys(defaultData) as (keyof Database)[]) {
+    if (!db.data[key]) {
+      (db.data as unknown as Record<string, unknown>)[key] = defaultData[key]
+    }
+  }
   dbInstance = db
   return db
 }
@@ -133,4 +140,48 @@ export async function createRateChange(input: RateChangeInput): Promise<RateChan
   }
   await db.write()
   return rateChange
+}
+
+// Investment CRUD
+export async function getInvestments(): Promise<Investment[]> {
+  const db = await getDb()
+  return db.data.investments
+}
+
+export async function getInvestment(id: string): Promise<Investment | undefined> {
+  const db = await getDb()
+  return db.data.investments.find((i) => i.id === id)
+}
+
+export async function createInvestment(input: InvestmentInput): Promise<Investment> {
+  const db = await getDb()
+  const investment: Investment = {
+    ...input,
+    id: uuidv4(),
+    updatedAt: new Date().toISOString().split('T')[0],
+  }
+  db.data.investments.push(investment)
+  await db.write()
+  return investment
+}
+
+export async function updateInvestment(id: string, input: Partial<InvestmentInput>): Promise<Investment | null> {
+  const db = await getDb()
+  const index = db.data.investments.findIndex((i) => i.id === id)
+  if (index === -1) return null
+  db.data.investments[index] = {
+    ...db.data.investments[index],
+    ...input,
+    updatedAt: new Date().toISOString().split('T')[0],
+  }
+  await db.write()
+  return db.data.investments[index]
+}
+
+export async function deleteInvestment(id: string): Promise<boolean> {
+  const db = await getDb()
+  const before = db.data.investments.length
+  db.data.investments = db.data.investments.filter((i) => i.id !== id)
+  await db.write()
+  return db.data.investments.length < before
 }

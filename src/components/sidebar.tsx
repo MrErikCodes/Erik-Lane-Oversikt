@@ -9,6 +9,7 @@ import {
   Calculator,
   History,
   PlusCircle,
+  TrendingUp,
   Menu,
   X,
 } from 'lucide-react'
@@ -19,6 +20,7 @@ const navItems = [
   { href: '/', label: 'Oversikt', icon: LayoutDashboard },
   { href: '/lan', label: 'Lån', icon: Wallet },
   { href: '/kalkulator', label: 'Kalkulator', icon: Calculator },
+  { href: '/investeringer', label: 'Investeringer', icon: TrendingUp },
   { href: '/historikk', label: 'Betalingshistorikk', icon: History },
   { href: '/registrer', label: 'Registrer betaling', icon: PlusCircle },
 ]

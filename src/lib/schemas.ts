@@ -48,7 +48,18 @@ export const scenarioSchema = z.object({
   customOrder: z.array(z.string()),
 })
 
+export const investmentSchema = z.object({
+  name: z.string().min(1, 'Navn er påkrevd'),
+  platform: z.string().min(1, 'Plattform er påkrevd'),
+  totalInvested: z.number().min(0),
+  currentValue: z.number().min(0),
+  averageNetReturn: z.number().min(0).max(100),
+  activeLoansCount: z.number().int().min(0),
+  notes: z.string().default(''),
+})
+
 export type LoanInput = z.infer<typeof loanSchema>
 export type PaymentInput = z.infer<typeof paymentSchema>
 export type ScenarioInput = z.infer<typeof scenarioSchema>
 export type RateChangeInput = z.infer<typeof rateChangeSchema>
+export type InvestmentInput = z.infer<typeof investmentSchema>

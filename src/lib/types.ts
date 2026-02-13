@@ -55,9 +55,22 @@ export interface Scenario {
   createdAt: string
 }
 
+export interface Investment {
+  id: string
+  name: string
+  platform: string
+  totalInvested: number
+  currentValue: number
+  averageNetReturn: number
+  activeLoansCount: number
+  notes: string
+  updatedAt: string
+}
+
 export interface Database {
   loans: Loan[]
   payments: Payment[]
   scenarios: Scenario[]
   rateChanges: RateChange[]
+  investments: Investment[]
 }

@@ -1,4 +1,4 @@
-import type { Loan } from './types'
+import type { Loan, Investment } from './types'
 
 export interface AmortizationRow {
   month: number
@@ -153,5 +153,66 @@ export function calculatePayoffComparison(loans: Loan[], extraMonthly: number): 
     snowball: calculateSnowball(loans, extraMonthly),
     avalanche: calculateAvalanche(loans, extraMonthly),
     minimumOnly: runStrategy(loans, 0, loans.map((l) => l.id)),
+  }
+}
+
+export interface OpportunityCostResult {
+  extraMonthly: number
+  investInstead: {
+    totalValueAfterMonths: number
+    totalEarnings: number
+    monthlyIncome: number
+  }
+  payLoansInstead: {
+    interestSaved: number
+    monthsSaved: number
+  }
+  netBenefit: number // positive = investing is better
+  recommendation: 'invest' | 'pay_loans'
+}
+
+export function calculateOpportunityCost(
+  loans: Loan[],
+  investments: Investment[],
+  extraMonthly: number,
+  months: number
+): OpportunityCostResult {
+  // Average investment return across all investments
+  const totalInvested = investments.reduce((sum, i) => sum + i.currentValue, 0)
+  const weightedReturn = totalInvested > 0
+    ? investments.reduce((sum, i) => sum + (i.currentValue * i.averageNetReturn / 100), 0) / totalInvested
+    : 0
+  const monthlyReturn = weightedReturn / 12
+
+  // Option A: Invest the extra monthly amount
+  let investmentValue = 0
+  for (let m = 0; m < months; m++) {
+    investmentValue += extraMonthly
+    investmentValue *= (1 + monthlyReturn)
+  }
+  const totalContributed = extraMonthly * months
+  const totalEarnings = investmentValue - totalContributed
+
+  // Option B: Pay extra on loans (use avalanche to calculate interest saved)
+  const withExtra = calculateAvalanche(loans, extraMonthly)
+  const withoutExtra = calculateAvalanche(loans, 0)
+  const interestSaved = withoutExtra.totalInterest - withExtra.totalInterest
+  const monthsSaved = withoutExtra.totalMonths - withExtra.totalMonths
+
+  const netBenefit = totalEarnings - interestSaved
+
+  return {
+    extraMonthly,
+    investInstead: {
+      totalValueAfterMonths: Math.round(investmentValue),
+      totalEarnings: Math.round(totalEarnings),
+      monthlyIncome: Math.round(totalInvested * monthlyReturn),
+    },
+    payLoansInstead: {
+      interestSaved: Math.round(interestSaved),
+      monthsSaved,
+    },
+    netBenefit: Math.round(netBenefit),
+    recommendation: netBenefit > 0 ? 'invest' : 'pay_loans',
   }
 }

@@ -10,8 +10,11 @@ import {
   deleteScenario,
   getLoan,
   createRateChange,
+  createInvestment,
+  updateInvestment,
+  deleteInvestment,
 } from '@/lib/db'
-import { loanSchema, paymentSchema, scenarioSchema, rateChangeSchema } from '@/lib/schemas'
+import { loanSchema, paymentSchema, scenarioSchema, rateChangeSchema, investmentSchema } from '@/lib/schemas'
 import { calculateMonthlyInterest } from '@/lib/calculations'
 
 export async function addLoanAction(formData: FormData) {
@@ -136,5 +139,48 @@ export async function addRateChangeAction(formData: FormData) {
   revalidatePath('/')
   revalidatePath('/lan')
   revalidatePath(`/lan/${loanId}`)
+  return { success: true }
+}
+
+export async function addInvestmentAction(formData: FormData) {
+  const raw = {
+    name: formData.get('name') as string,
+    platform: formData.get('platform') as string,
+    totalInvested: Number(formData.get('totalInvested')),
+    currentValue: Number(formData.get('currentValue')),
+    averageNetReturn: Number(formData.get('averageNetReturn')),
+    activeLoansCount: Number(formData.get('activeLoansCount')),
+    notes: (formData.get('notes') as string) || '',
+  }
+  const parsed = investmentSchema.safeParse(raw)
+  if (!parsed.success) return { error: parsed.error.flatten().fieldErrors }
+  await createInvestment(parsed.data)
+  revalidatePath('/')
+  revalidatePath('/investeringer')
+  return { success: true }
+}
+
+export async function updateInvestmentAction(id: string, formData: FormData) {
+  const raw = {
+    name: formData.get('name') as string,
+    platform: formData.get('platform') as string,
+    totalInvested: Number(formData.get('totalInvested')),
+    currentValue: Number(formData.get('currentValue')),
+    averageNetReturn: Number(formData.get('averageNetReturn')),
+    activeLoansCount: Number(formData.get('activeLoansCount')),
+    notes: (formData.get('notes') as string) || '',
+  }
+  const parsed = investmentSchema.safeParse(raw)
+  if (!parsed.success) return { error: parsed.error.flatten().fieldErrors }
+  await updateInvestment(id, parsed.data)
+  revalidatePath('/')
+  revalidatePath('/investeringer')
+  return { success: true }
+}
+
+export async function deleteInvestmentAction(id: string) {
+  await deleteInvestment(id)
+  revalidatePath('/')
+  revalidatePath('/investeringer')
   return { success: true }
 }
