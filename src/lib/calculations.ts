@@ -148,71 +148,331 @@ export function calculateCustomStrategy(loans: Loan[], extraMonthly: number, cus
   return runStrategy(loans, extraMonthly, customOrder)
 }
 
-export function calculatePayoffComparison(loans: Loan[], extraMonthly: number): PayoffComparison {
+export function calculatePayoffComparison(loans: Loan[], extraMonthly: number, excludeIds: string[] = []): PayoffComparison {
+  const activeLoans = loans.filter((l) => !excludeIds.includes(l.id))
   return {
-    snowball: calculateSnowball(loans, extraMonthly),
-    avalanche: calculateAvalanche(loans, extraMonthly),
-    minimumOnly: runStrategy(loans, 0, loans.map((l) => l.id)),
+    snowball: calculateSnowball(activeLoans, extraMonthly),
+    avalanche: calculateAvalanche(activeLoans, extraMonthly),
+    minimumOnly: runStrategy(activeLoans, 0, activeLoans.map((l) => l.id)),
   }
 }
 
-export interface OpportunityCostResult {
+export interface WealthSnapshot {
+  month: number
+  investWealth: number
+  payThenInvestWealth: number
+}
+
+export interface WealthComparisonResult {
   extraMonthly: number
-  investInstead: {
-    totalValueAfterMonths: number
-    totalEarnings: number
-    monthlyIncome: number
+  horizon: number
+  investOnly: {
+    portfolioValue: number
+    targetInterestPaid: number
   }
-  payLoansInstead: {
-    interestSaved: number
-    monthsSaved: number
+  payThenInvest: {
+    portfolioValue: number
+    targetInterestPaid: number
+    targetsPaidOffMonth: number
+    freedMonthlyAfterPayoff: number
   }
-  netBenefit: number // positive = investing is better
+  interestSaved: number
+  netBenefit: number // positive = payThenInvest creates more wealth
   recommendation: 'invest' | 'pay_loans'
+  timeline: WealthSnapshot[]
 }
 
-export function calculateOpportunityCost(
+function simulateScenario(
+  targetLoans: Loan[],
+  extraMonthly: number,
+  monthlyReturn: number,
+  payDownTargets: boolean,
+  horizon: number
+) {
+  const balances = new Map<string, number>()
+  const rates = new Map<string, number>()
+  const mins = new Map<string, number>()
+  const loanFees = new Map<string, number>()
+
+  for (const loan of targetLoans) {
+    balances.set(loan.id, loan.currentBalance)
+    rates.set(loan.id, loan.nominalInterestRate)
+    mins.set(loan.id, loan.monthlyPayment)
+    loanFees.set(loan.id, loan.monthlyFees)
+  }
+
+  // Target loans in avalanche order (highest rate first)
+  const targetOrder = targetLoans
+    .slice()
+    .sort((a, b) => b.nominalInterestRate - a.nominalInterestRate)
+    .map((l) => l.id)
+
+  let portfolio = 0
+  let targetInterest = 0
+  let targetsPaidOffMonth = 0
+  const snapshots: { month: number; portfolio: number }[] = []
+
+  for (let month = 1; month <= horizon; month++) {
+    let toInvest = extraMonthly
+
+    // Pay minimums on target loans; freed payments add to investable
+    for (const loan of targetLoans) {
+      const bal = balances.get(loan.id)!
+      if (bal <= 0.01) {
+        toInvest += mins.get(loan.id)!
+        continue
+      }
+      const rate = rates.get(loan.id)!
+      const fee = loanFees.get(loan.id)!
+      const interest = calculateMonthlyInterest(bal, rate)
+      targetInterest += interest
+      const pmt = Math.min(mins.get(loan.id)!, bal + interest + fee)
+      const principal = Math.max(0, pmt - interest - fee)
+      balances.set(loan.id, Math.max(0, bal - principal))
+    }
+
+    // If paying down targets: apply investable to loans first (avalanche)
+    if (payDownTargets) {
+      let budget = toInvest
+      toInvest = 0
+      for (const id of targetOrder) {
+        if (budget <= 0) break
+        const bal = balances.get(id)!
+        if (bal <= 0.01) continue
+        const extra = Math.min(budget, bal)
+        balances.set(id, Math.max(0, bal - extra))
+        budget -= extra
+      }
+      toInvest = budget // leftover goes to investments
+    }
+
+    // Track when all target loans are paid off
+    if (targetsPaidOffMonth === 0 && targetOrder.every((id) => (balances.get(id) ?? 0) <= 0.01)) {
+      targetsPaidOffMonth = month
+    }
+
+    // Invest
+    portfolio += toInvest
+    portfolio *= (1 + monthlyReturn)
+
+    if (month % 6 === 0 || month === horizon || month <= 12) {
+      snapshots.push({ month, portfolio })
+    }
+  }
+
+  const freedMonthly = targetLoans.reduce((sum, l) => sum + l.monthlyPayment, 0) + extraMonthly
+  return { portfolio, targetInterest, targetsPaidOffMonth, freedMonthly, snapshots }
+}
+
+export function calculateWealthComparison(
   loans: Loan[],
   investments: Investment[],
   extraMonthly: number,
-  months: number
-): OpportunityCostResult {
-  // Average investment return across all investments
-  const totalInvested = investments.reduce((sum, i) => sum + i.currentValue, 0)
-  const weightedReturn = totalInvested > 0
-    ? investments.reduce((sum, i) => sum + (i.currentValue * i.averageNetReturn / 100), 0) / totalInvested
+  excludeLoanIds: string[] = [],
+  customHorizon?: number
+): WealthComparisonResult {
+  // Weighted average investment return
+  const totalValue = investments.reduce((sum, i) => sum + i.currentValue, 0)
+  const weightedReturn = totalValue > 0
+    ? investments.reduce((sum, i) => sum + (i.currentValue * i.averageNetReturn / 100), 0) / totalValue
     : 0
   const monthlyReturn = weightedReturn / 12
 
-  // Option A: Invest the extra monthly amount
-  let investmentValue = 0
-  for (let m = 0; m < months; m++) {
-    investmentValue += extraMonthly
-    investmentValue *= (1 + monthlyReturn)
-  }
-  const totalContributed = extraMonthly * months
-  const totalEarnings = investmentValue - totalContributed
+  // Only simulate target loans — non-target loans behave the same in both scenarios
+  const targetLoans = loans.filter((l) => !excludeLoanIds.includes(l.id))
 
-  // Option B: Pay extra on loans (use avalanche to calculate interest saved)
-  const withExtra = calculateAvalanche(loans, extraMonthly)
-  const withoutExtra = calculateAvalanche(loans, 0)
-  const interestSaved = withoutExtra.totalInterest - withExtra.totalInterest
-  const monthsSaved = withoutExtra.totalMonths - withExtra.totalMonths
+  // Default horizon: max natural payoff time of target loans
+  const maxTargetPayoff = targetLoans.reduce((max, l) => Math.max(max, l.remainingTermMonths), 0)
+  const horizon = customHorizon ?? maxTargetPayoff
 
-  const netBenefit = totalEarnings - interestSaved
+  // Scenario A: Invest extra directly, target loans pay off naturally
+  const scenarioA = simulateScenario(targetLoans, extraMonthly, monthlyReturn, false, horizon)
+
+  // Scenario B: Pay down target loans first, then invest everything
+  const scenarioB = simulateScenario(targetLoans, extraMonthly, monthlyReturn, true, horizon)
+
+  const netBenefit = scenarioB.portfolio - scenarioA.portfolio
+  const interestSaved = Math.round(scenarioA.targetInterest - scenarioB.targetInterest)
+
+  // Build merged timeline
+  const allMonths = new Set<number>()
+  for (const s of scenarioA.snapshots) allMonths.add(s.month)
+  for (const s of scenarioB.snapshots) allMonths.add(s.month)
+  const sortedMonths = [...allMonths].sort((a, b) => a - b)
+
+  const aMap = new Map(scenarioA.snapshots.map((s) => [s.month, s.portfolio]))
+  const bMap = new Map(scenarioB.snapshots.map((s) => [s.month, s.portfolio]))
+
+  const timeline: WealthSnapshot[] = sortedMonths.map((m) => ({
+    month: m,
+    investWealth: aMap.get(m) ?? 0,
+    payThenInvestWealth: bMap.get(m) ?? 0,
+  }))
 
   return {
     extraMonthly,
-    investInstead: {
-      totalValueAfterMonths: Math.round(investmentValue),
-      totalEarnings: Math.round(totalEarnings),
-      monthlyIncome: Math.round(totalInvested * monthlyReturn),
+    horizon,
+    investOnly: {
+      portfolioValue: Math.round(scenarioA.portfolio),
+      targetInterestPaid: Math.round(scenarioA.targetInterest),
     },
-    payLoansInstead: {
-      interestSaved: Math.round(interestSaved),
-      monthsSaved,
+    payThenInvest: {
+      portfolioValue: Math.round(scenarioB.portfolio),
+      targetInterestPaid: Math.round(scenarioB.targetInterest),
+      targetsPaidOffMonth: scenarioB.targetsPaidOffMonth,
+      freedMonthlyAfterPayoff: scenarioB.freedMonthly,
     },
+    interestSaved,
     netBenefit: Math.round(netBenefit),
-    recommendation: netBenefit > 0 ? 'invest' : 'pay_loans',
+    recommendation: netBenefit > 0 ? 'pay_loans' : 'invest',
+    timeline,
+  }
+}
+
+// Optimal plan: month-by-month simulation combining loan payoff + investing
+
+export interface OptimalPlanMonth {
+  month: number
+  date: string
+  loanPayments: Map<string, number> // total paid per loan this month (min + extra)
+  loanBalances: Map<string, number>
+  toFundingPartner: number
+  totalDebt: number
+  investmentPortfolio: number
+  totalInterestPaid: number
+  netWealth: number
+  events: string[]
+}
+
+export interface OptimalPlanResult {
+  months: OptimalPlanMonth[] // EVERY month
+  summary: {
+    totalInterestPaid: number
+    totalInvested: number
+    finalPortfolio: number
+    finalDebt: number
+    finalNetWealth: number
+    milestones: { month: number; date: string; event: string }[]
+  }
+  horizon: number
+}
+
+export function calculateOptimalPlan(
+  loans: Loan[],
+  investments: Investment[],
+  extraMonthly: number,
+  payoffOrder: string[], // loan IDs in desired payoff priority
+  autopilotIds: string[], // loans that only get minimums (e.g. studielån)
+  horizon: number
+): OptimalPlanResult {
+  const totalValue = investments.reduce((sum, i) => sum + i.currentValue, 0)
+  const weightedReturn = totalValue > 0
+    ? investments.reduce((sum, i) => sum + (i.currentValue * i.averageNetReturn / 100), 0) / totalValue
+    : 0
+  const monthlyReturn = weightedReturn / 12
+
+  const balances = new Map<string, number>()
+  const rates = new Map<string, number>()
+  const mins = new Map<string, number>()
+  const loanFeesMap = new Map<string, number>()
+
+  for (const loan of loans) {
+    balances.set(loan.id, loan.currentBalance)
+    rates.set(loan.id, loan.nominalInterestRate)
+    mins.set(loan.id, loan.monthlyPayment)
+    loanFeesMap.set(loan.id, loan.monthlyFees)
+  }
+
+  const autopilotSet = new Set(autopilotIds)
+  // Start portfolio from existing investment value — it compounds from day one
+  let portfolio = investments.reduce((sum, i) => sum + i.currentValue, 0)
+  let totalInterestPaid = 0
+  let totalInvested = 0
+  const months: OptimalPlanMonth[] = []
+  const milestones: { month: number; date: string; event: string }[] = []
+  const now = new Date()
+  const paidOff = new Set<string>()
+
+  for (let month = 1; month <= horizon; month++) {
+    const events: string[] = []
+    const loanPayments = new Map<string, number>()
+    let budget = extraMonthly
+
+    // Pay minimums on all active loans
+    for (const loan of loans) {
+      const bal = balances.get(loan.id)!
+      if (bal <= 0.01) {
+        budget += mins.get(loan.id)!
+        loanPayments.set(loan.id, 0)
+        continue
+      }
+      const rate = rates.get(loan.id)!
+      const fee = loanFeesMap.get(loan.id)!
+      const interest = calculateMonthlyInterest(bal, rate)
+      totalInterestPaid += interest
+      const pmt = Math.min(mins.get(loan.id)!, bal + interest + fee)
+      const principal = Math.max(0, pmt - interest - fee)
+      balances.set(loan.id, Math.max(0, bal - principal))
+      loanPayments.set(loan.id, pmt)
+    }
+
+    // Apply extra to payoff order (skip autopilot loans)
+    for (const id of payoffOrder) {
+      if (budget <= 0) break
+      if (autopilotSet.has(id)) continue
+      const bal = balances.get(id)!
+      if (bal <= 0.01) continue
+      const extra = Math.min(budget, bal)
+      balances.set(id, Math.max(0, bal - extra))
+      budget -= extra
+      loanPayments.set(id, (loanPayments.get(id) ?? 0) + extra)
+    }
+
+    // Check for newly paid-off loans
+    for (const loan of loans) {
+      if (!paidOff.has(loan.id) && (balances.get(loan.id) ?? 0) <= 0.01) {
+        paidOff.add(loan.id)
+        const d = new Date(now.getFullYear(), now.getMonth() + month, 1)
+        const dateStr = d.toISOString().split('T')[0]
+        events.push(`${loan.name} nedbetalt!`)
+        milestones.push({ month, date: dateStr, event: `${loan.name} nedbetalt` })
+      }
+    }
+
+    // Invest remaining budget
+    portfolio += budget
+    totalInvested += budget
+    portfolio *= (1 + monthlyReturn)
+
+    const totalDebt = Array.from(balances.values()).reduce((a, b) => a + b, 0)
+    const date = new Date(now.getFullYear(), now.getMonth() + month, 1).toISOString().split('T')[0]
+
+    months.push({
+      month,
+      date,
+      loanPayments,
+      loanBalances: new Map(balances),
+      toFundingPartner: budget,
+      totalDebt,
+      investmentPortfolio: portfolio,
+      totalInterestPaid,
+      netWealth: portfolio - totalDebt,
+      events,
+    })
+  }
+
+  const finalDebt = Array.from(balances.values()).reduce((a, b) => a + b, 0)
+
+  return {
+    months,
+    summary: {
+      totalInterestPaid: Math.round(totalInterestPaid),
+      totalInvested: Math.round(totalInvested),
+      finalPortfolio: Math.round(portfolio),
+      finalDebt: Math.round(finalDebt),
+      finalNetWealth: Math.round(portfolio - finalDebt),
+      milestones,
+    },
+    horizon,
   }
 }

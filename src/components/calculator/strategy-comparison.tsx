@@ -41,7 +41,7 @@ function StrategyCard({ title, result, savings, loans, highlight }: {
           </div>
           <div>
             <p className="text-sm text-muted-foreground">Spart vs minimum</p>
-            <p className="text-lg font-bold text-green-500">{formatNOK(savings)}</p>
+            <p className={`text-lg font-bold ${savings > 0 ? 'text-green-500' : savings < 0 ? 'text-red-400' : 'text-yellow-500'}`}>{formatNOK(savings)}</p>
           </div>
         </div>
         <div>

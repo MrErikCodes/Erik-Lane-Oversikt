@@ -18,14 +18,22 @@ export default async function CalculatorPage() {
     )
   }
 
-  const comparison = calculatePayoffComparison(loans, 0)
+  const excludeIds = loans.filter((l) => l.priority >= 9999).map((l) => l.id)
+  const excludedLoans = loans.filter((l) => l.priority >= 9999)
+  const activeLoans = loans.filter((l) => l.priority < 9999)
+  const comparison = calculatePayoffComparison(loans, 0, excludeIds)
 
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Kalkulator</h1>
       <p className="text-muted-foreground">Sammenlign strategier for å bli gjeldsfri raskere.</p>
-      <StrategyComparison snowball={comparison.snowball} avalanche={comparison.avalanche} minimumOnly={comparison.minimumOnly} loans={loans} />
-      <WhatIfPanel loans={loans} baseComparison={comparison} />
+      {excludedLoans.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {excludedLoans.map((l) => l.name).join(', ')} er satt til kun minimumsbetaling og er ekskludert fra strategiene.
+        </p>
+      )}
+      <StrategyComparison snowball={comparison.snowball} avalanche={comparison.avalanche} minimumOnly={comparison.minimumOnly} loans={activeLoans} />
+      <WhatIfPanel loans={activeLoans} baseComparison={comparison} />
       <OpportunityCostPanel loans={loans} investments={investments} />
     </div>
   )

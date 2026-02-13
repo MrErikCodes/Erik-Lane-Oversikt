@@ -23,7 +23,12 @@ export function ProgressChart({ timeline }: ProgressChartProps) {
           <AreaChart data={data}>
             <XAxis dataKey="mnd" stroke="#888" fontSize={12} />
             <YAxis stroke="#888" fontSize={12} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-            <Tooltip formatter={(value) => formatNOK(Number(value))} labelFormatter={(l) => `Måned ${l}`} />
+            <Tooltip
+              contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: 8, color: 'hsl(var(--card-foreground))' }}
+              labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
+              formatter={(value) => formatNOK(Number(value))}
+              labelFormatter={(l) => `Måned ${l}`}
+            />
             <Area type="monotone" dataKey="gjeld" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.2} />
           </AreaChart>
         </ResponsiveContainer>
