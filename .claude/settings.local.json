@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx shadcn@latest init:*)",
+      "Bash(npx shadcn@latest *)",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(npm run test:run:*)",
+      "Bash(wc:*)",
+      "Bash(npm ls:*)",
+      "Bash(node -e:*)",
+      "Bash(npx vitest run)"
+    ]
+  }
+}
