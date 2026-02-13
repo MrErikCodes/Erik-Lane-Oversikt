@@ -148,7 +148,11 @@ next-env.d.ts
 .DS_Store
 *.pem
 
+# Playwright browser state
+.playwright-state.json
+scraper-error.png
+/test-results/
+/playwright-report/
+
 nul
 
-# Local database (contains personal financial data)
-db.json
