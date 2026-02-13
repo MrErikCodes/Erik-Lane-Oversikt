@@ -149,3 +149,6 @@ next-env.d.ts
 *.pem
 
 nul
+
+# Local database (contains personal financial data)
+db.json
