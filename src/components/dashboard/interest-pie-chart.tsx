@@ -27,7 +27,7 @@ export function InterestPieChart({ loans }: InterestPieChartProps) {
             <Pie data={data} dataKey="rente" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
               {data.map((_, i) => (<Cell key={i} fill={COLORS[i % COLORS.length]} />))}
             </Pie>
-            <Tooltip formatter={(value: number) => formatNOK(value)} />
+            <Tooltip formatter={(value) => formatNOK(Number(value))} />
             <Legend />
           </PieChart>
         </ResponsiveContainer>

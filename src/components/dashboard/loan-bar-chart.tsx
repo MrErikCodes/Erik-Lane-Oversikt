@@ -20,7 +20,7 @@ export function LoanBarChart({ loans }: LoanBarChartProps) {
           <BarChart data={data}>
             <XAxis dataKey="name" stroke="#888" fontSize={12} />
             <YAxis stroke="#888" fontSize={12} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-            <Tooltip formatter={(value: number) => formatNOK(value)} />
+            <Tooltip formatter={(value) => formatNOK(Number(value))} />
             <Bar dataKey="saldo" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
