@@ -147,9 +147,22 @@ export interface Loan {
   remainingTermMonths: number
   originationDate: string
   paymentDueDay: number
+  fixedRateTermsRemaining: number
+  rateAfterFixedPeriod: number | null
   priority: number
   createdAt: string
   updatedAt: string
+}
+
+export interface RateChange {
+  id: string
+  loanId: string
+  date: string
+  oldNominalRate: number
+  newNominalRate: number
+  oldEffectiveRate: number
+  newEffectiveRate: number
+  reason: string
 }
 
 export interface Payment {
@@ -176,6 +189,7 @@ export interface Database {
   loans: Loan[]
   payments: Payment[]
   scenarios: Scenario[]
+  rateChanges: RateChange[]
 }
 ```
 
@@ -200,7 +214,19 @@ export const loanSchema = z.object({
   remainingTermMonths: z.number().int().positive('Må være positivt'),
   originationDate: z.string(),
   paymentDueDay: z.number().int().min(1).max(31),
+  fixedRateTermsRemaining: z.number().int().min(0).default(0),
+  rateAfterFixedPeriod: z.number().min(0).max(100).nullable().default(null),
   priority: z.number().int().min(1),
+})
+
+export const rateChangeSchema = z.object({
+  loanId: z.string().uuid(),
+  date: z.string(),
+  oldNominalRate: z.number().min(0).max(100),
+  newNominalRate: z.number().min(0).max(100),
+  oldEffectiveRate: z.number().min(0).max(100),
+  newEffectiveRate: z.number().min(0).max(100),
+  reason: z.string().default(''),
 })
 
 export const paymentSchema = z.object({
@@ -223,6 +249,7 @@ export const scenarioSchema = z.object({
 export type LoanInput = z.infer<typeof loanSchema>
 export type PaymentInput = z.infer<typeof paymentSchema>
 export type ScenarioInput = z.infer<typeof scenarioSchema>
+export type RateChangeInput = z.infer<typeof rateChangeSchema>
 ```
 
 **Step 2: Write the database module**
@@ -234,13 +261,14 @@ import { join } from 'path'
 import { Low } from 'lowdb'
 import { JSONFile } from 'lowdb/node'
 import { v4 as uuidv4 } from 'uuid'
-import type { Database, Loan, Payment, Scenario } from './types'
-import type { LoanInput, PaymentInput, ScenarioInput } from './schemas'
+import type { Database, Loan, Payment, Scenario, RateChange } from './types'
+import type { LoanInput, PaymentInput, ScenarioInput, RateChangeInput } from './schemas'
 
 const defaultData: Database = {
   loans: [],
   payments: [],
   scenarios: [],
+  rateChanges: [],
 }
 
 let dbInstance: Low<Database> | null = null
@@ -350,6 +378,33 @@ export async function deleteScenario(id: string): Promise<boolean> {
   db.data.scenarios = db.data.scenarios.filter((s) => s.id !== id)
   await db.write()
   return db.data.scenarios.length < before
+}
+
+// Rate Change CRUD
+export async function getRateChanges(loanId?: string): Promise<RateChange[]> {
+  const db = await getDb()
+  if (loanId) return db.data.rateChanges.filter((r) => r.loanId === loanId)
+  return db.data.rateChanges
+}
+
+export async function createRateChange(input: RateChangeInput): Promise<RateChange> {
+  const db = await getDb()
+  const rateChange: RateChange = {
+    ...input,
+    id: uuidv4(),
+  }
+  db.data.rateChanges.push(rateChange)
+
+  // Update the loan's current rates
+  const loan = db.data.loans.find((l) => l.id === input.loanId)
+  if (loan) {
+    loan.nominalInterestRate = input.newNominalRate
+    loan.effectiveInterestRate = input.newEffectiveRate
+    loan.updatedAt = new Date().toISOString().split('T')[0]
+  }
+
+  await db.write()
+  return rateChange
 }
 ```
 
@@ -661,14 +716,24 @@ export function calculateMonthlyInterest(balance: number, annualRate: number): n
 }
 
 // Generate amortization schedule for a single loan
+// Handles fixed-rate periods: uses current rate for fixedRateTermsRemaining months,
+// then switches to rateAfterFixedPeriod (if set)
 export function generateAmortizationSchedule(loan: Loan): AmortizationRow[] {
   const schedule: AmortizationRow[] = []
   let balance = loan.currentBalance
   let month = 0
+  let currentRate = loan.nominalInterestRate
+  const fixedTerms = loan.fixedRateTermsRemaining || 0
 
   while (balance > 0.01 && month < 600) { // cap at 50 years
     month++
-    const interest = calculateMonthlyInterest(balance, loan.nominalInterestRate)
+
+    // Switch rate after fixed period ends
+    if (fixedTerms > 0 && month > fixedTerms && loan.rateAfterFixedPeriod !== null) {
+      currentRate = loan.rateAfterFixedPeriod
+    }
+
+    const interest = calculateMonthlyInterest(balance, currentRate)
     const fees = loan.monthlyFees
     const totalPayment = Math.min(loan.monthlyPayment, balance + interest + fees)
     const principal = Math.max(0, totalPayment - interest - fees)
@@ -1023,6 +1088,8 @@ export async function addLoanAction(formData: FormData) {
     remainingTermMonths: Number(formData.get('remainingTermMonths')),
     originationDate: formData.get('originationDate') as string,
     paymentDueDay: Number(formData.get('paymentDueDay')),
+    fixedRateTermsRemaining: Number(formData.get('fixedRateTermsRemaining') || 0),
+    rateAfterFixedPeriod: formData.get('rateAfterFixedPeriod') ? Number(formData.get('rateAfterFixedPeriod')) : null,
     priority: Number(formData.get('priority')),
   }
 
@@ -1052,6 +1119,8 @@ export async function updateLoanAction(id: string, formData: FormData) {
     remainingTermMonths: Number(formData.get('remainingTermMonths')),
     originationDate: formData.get('originationDate') as string,
     paymentDueDay: Number(formData.get('paymentDueDay')),
+    fixedRateTermsRemaining: Number(formData.get('fixedRateTermsRemaining') || 0),
+    rateAfterFixedPeriod: formData.get('rateAfterFixedPeriod') ? Number(formData.get('rateAfterFixedPeriod')) : null,
     priority: Number(formData.get('priority')),
   }
 
@@ -1132,6 +1201,35 @@ export async function addScenarioAction(formData: FormData) {
 export async function deleteScenarioAction(id: string) {
   await deleteScenario(id)
   revalidatePath('/kalkulator')
+  return { success: true }
+}
+
+export async function addRateChangeAction(formData: FormData) {
+  const loanId = formData.get('loanId') as string
+  const loan = await getLoan(loanId)
+  if (!loan) return { error: 'Lån ikke funnet' }
+
+  const raw = {
+    loanId,
+    date: formData.get('date') as string,
+    oldNominalRate: loan.nominalInterestRate,
+    newNominalRate: Number(formData.get('newNominalRate')),
+    oldEffectiveRate: loan.effectiveInterestRate,
+    newEffectiveRate: Number(formData.get('newEffectiveRate')),
+    reason: (formData.get('reason') as string) || '',
+  }
+
+  const { rateChangeSchema } = await import('@/lib/schemas')
+  const parsed = rateChangeSchema.safeParse(raw)
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors }
+  }
+
+  const { createRateChange } = await import('@/lib/db')
+  await createRateChange(parsed.data)
+  revalidatePath('/')
+  revalidatePath('/lan')
+  revalidatePath(`/lan/${loanId}`)
   return { success: true }
 }
 ```
@@ -1713,6 +1811,16 @@ export function LoanForm({ loan, trigger }: LoanFormProps) {
           </div>
 
           <div>
+            <Label htmlFor="fixedRateTermsRemaining">Fastrenteperiode (mnd gjenstående)</Label>
+            <Input id="fixedRateTermsRemaining" name="fixedRateTermsRemaining" type="number" min="0" defaultValue={loan?.fixedRateTermsRemaining ?? 0} />
+          </div>
+
+          <div>
+            <Label htmlFor="rateAfterFixedPeriod">Rente etter fastperiode (%)</Label>
+            <Input id="rateAfterFixedPeriod" name="rateAfterFixedPeriod" type="number" step="0.01" defaultValue={loan?.rateAfterFixedPeriod ?? ''} placeholder="La stå tom hvis ukjent" />
+          </div>
+
+          <div>
             <Label htmlFor="priority">Prioritet</Label>
             <Input id="priority" name="priority" type="number" min="1" defaultValue={loan?.priority ?? 1} required />
           </div>
@@ -1858,6 +1966,7 @@ git commit -m "feat: add loans list page with CRUD form and table"
 - Create: `src/components/loans/amortization-table.tsx`
 - Create: `src/components/loans/loan-payment-history.tsx`
 - Create: `src/components/loans/loan-info-card.tsx`
+- Create: `src/components/loans/rate-change-history.tsx`
 
 **Step 1: Create loan info card**
 
@@ -1926,6 +2035,18 @@ export function LoanInfoCard({ loan }: LoanInfoCardProps) {
             <p className="text-sm text-muted-foreground">Gjenstående</p>
             <p className="font-medium">{formatMonths(loan.remainingTermMonths)}</p>
           </div>
+          {loan.fixedRateTermsRemaining > 0 && (
+            <div>
+              <p className="text-sm text-muted-foreground">Fastrente gjenstående</p>
+              <p className="font-medium">{formatMonths(loan.fixedRateTermsRemaining)}</p>
+            </div>
+          )}
+          {loan.rateAfterFixedPeriod !== null && (
+            <div>
+              <p className="text-sm text-muted-foreground">Rente etter fastperiode</p>
+              <p className="font-medium">{formatPercent(loan.rateAfterFixedPeriod)}</p>
+            </div>
+          )}
           <div>
             <p className="text-sm text-muted-foreground">Startdato</p>
             <p className="font-medium">{formatDate(loan.originationDate)}</p>
@@ -2080,17 +2201,142 @@ export function LoanPaymentHistory({ payments }: LoanPaymentHistoryProps) {
 }
 ```
 
-**Step 4: Create the loan detail page**
+**Step 4: Create rate change history component**
+
+Create `src/components/loans/rate-change-history.tsx`:
+
+```tsx
+'use client'
+
+import { useRef, useState } from 'react'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { formatPercent, formatDate } from '@/lib/format'
+import { addRateChangeAction } from '@/app/actions'
+import type { RateChange } from '@/lib/types'
+import { TrendingUp } from 'lucide-react'
+
+interface RateChangeHistoryProps {
+  rateChanges: RateChange[]
+  loanId: string
+}
+
+export function RateChangeHistory({ rateChanges, loanId }: RateChangeHistoryProps) {
+  const [open, setOpen] = useState(false)
+  const formRef = useRef<HTMLFormElement>(null)
+
+  const sorted = [...rateChanges].sort((a, b) => b.date.localeCompare(a.date))
+
+  async function handleSubmit(formData: FormData) {
+    const result = await addRateChangeAction(formData)
+    if ('success' in result && result.success) {
+      setOpen(false)
+      formRef.current?.reset()
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5" />
+          Rentehistorikk
+        </CardTitle>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button variant="outline" size="sm">Registrer renteendring</Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Registrer renteendring</DialogTitle>
+            </DialogHeader>
+            <form ref={formRef} action={handleSubmit} className="space-y-4">
+              <input type="hidden" name="loanId" value={loanId} />
+              <div>
+                <Label htmlFor="date">Dato for endring</Label>
+                <Input id="date" name="date" type="date" defaultValue={new Date().toISOString().split('T')[0]} required />
+              </div>
+              <div>
+                <Label htmlFor="newNominalRate">Ny nominell rente (%)</Label>
+                <Input id="newNominalRate" name="newNominalRate" type="number" step="0.01" required />
+              </div>
+              <div>
+                <Label htmlFor="newEffectiveRate">Ny effektiv rente (%)</Label>
+                <Input id="newEffectiveRate" name="newEffectiveRate" type="number" step="0.01" required />
+              </div>
+              <div>
+                <Label htmlFor="reason">Årsak</Label>
+                <Input id="reason" name="reason" placeholder="F.eks. Norges Bank renteheving" />
+              </div>
+              <Button type="submit" className="w-full">Lagre</Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent>
+        {sorted.length === 0 ? (
+          <p className="text-muted-foreground text-center py-4">Ingen renteendringer registrert.</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Dato</TableHead>
+                <TableHead className="text-right">Gammel nominell</TableHead>
+                <TableHead className="text-right">Ny nominell</TableHead>
+                <TableHead className="text-right">Gammel effektiv</TableHead>
+                <TableHead className="text-right">Ny effektiv</TableHead>
+                <TableHead>Årsak</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sorted.map((rc) => (
+                <TableRow key={rc.id}>
+                  <TableCell>{formatDate(rc.date)}</TableCell>
+                  <TableCell className="text-right">{formatPercent(rc.oldNominalRate)}</TableCell>
+                  <TableCell className="text-right">{formatPercent(rc.newNominalRate)}</TableCell>
+                  <TableCell className="text-right">{formatPercent(rc.oldEffectiveRate)}</TableCell>
+                  <TableCell className="text-right">{formatPercent(rc.newEffectiveRate)}</TableCell>
+                  <TableCell>{rc.reason || '—'}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+```
+
+**Step 5: Create the loan detail page**
 
 Create `src/app/lan/[id]/page.tsx`:
 
 ```tsx
 import { notFound } from 'next/navigation'
-import { getLoan, getPayments } from '@/lib/db'
+import { getLoan, getPayments, getRateChanges } from '@/lib/db'
 import { generateAmortizationSchedule } from '@/lib/calculations'
 import { LoanInfoCard } from '@/components/loans/loan-info-card'
 import { AmortizationTable } from '@/components/loans/amortization-table'
 import { LoanPaymentHistory } from '@/components/loans/loan-payment-history'
+import { RateChangeHistory } from '@/components/loans/rate-change-history'
 import { LoanForm } from '@/components/loans/loan-form'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
@@ -2106,6 +2352,7 @@ export default async function LoanDetailPage({ params }: LoanDetailPageProps) {
   if (!loan) notFound()
 
   const payments = await getPayments(id)
+  const rateChanges = await getRateChanges(id)
   const schedule = generateAmortizationSchedule(loan)
 
   return (
@@ -2119,6 +2366,7 @@ export default async function LoanDetailPage({ params }: LoanDetailPageProps) {
       </div>
 
       <LoanInfoCard loan={loan} />
+      <RateChangeHistory rateChanges={rateChanges} loanId={loan.id} />
       <AmortizationTable schedule={schedule} />
       <LoanPaymentHistory payments={payments} />
     </div>
@@ -2126,19 +2374,19 @@ export default async function LoanDetailPage({ params }: LoanDetailPageProps) {
 }
 ```
 
-**Step 5: Verify**
+**Step 6: Verify**
 
 ```bash
 npm run dev
 ```
 
-Navigate to /lan, add a loan, click into detail — should see all three sections.
+Navigate to /lan, add a loan, click into detail — should see loan info, rate change history, amortization schedule, and payment history.
 
-**Step 6: Commit**
+**Step 7: Commit**
 
 ```bash
-git add src/app/lan/[id]/ src/components/loans/loan-info-card.tsx src/components/loans/amortization-table.tsx src/components/loans/loan-payment-history.tsx
-git commit -m "feat: add loan detail page with amortization schedule and payment history"
+git add src/app/lan/[id]/ src/components/loans/loan-info-card.tsx src/components/loans/amortization-table.tsx src/components/loans/loan-payment-history.tsx src/components/loans/rate-change-history.tsx
+git commit -m "feat: add loan detail page with amortization, rate history, and payment history"
 ```
 
 ---
@@ -2723,6 +2971,8 @@ const sampleLoans = [
     remainingTermMonths: 240,
     originationDate: '2022-01-15',
     paymentDueDay: 15,
+    fixedRateTermsRemaining: 0,
+    rateAfterFixedPeriod: null,
     priority: 4,
   },
   {
@@ -2739,6 +2989,8 @@ const sampleLoans = [
     remainingTermMonths: 48,
     originationDate: '2024-06-01',
     paymentDueDay: 1,
+    fixedRateTermsRemaining: 30,
+    rateAfterFixedPeriod: null,
     priority: 2,
   },
   {
@@ -2755,6 +3007,8 @@ const sampleLoans = [
     remainingTermMonths: 36,
     originationDate: '2025-03-01',
     paymentDueDay: 20,
+    fixedRateTermsRemaining: 0,
+    rateAfterFixedPeriod: null,
     priority: 1,
   },
   {
@@ -2771,6 +3025,8 @@ const sampleLoans = [
     remainingTermMonths: 180,
     originationDate: '2020-09-01',
     paymentDueDay: 15,
+    fixedRateTermsRemaining: 0,
+    rateAfterFixedPeriod: null,
     priority: 3,
   },
 ]

@@ -48,11 +48,32 @@ Personal loan management dashboard for tracking and optimizing payoff of 4 Norwe
   "remainingTermMonths": 240,
   "originationDate": "2022-01-15",
   "paymentDueDay": 15,
+  "fixedRateTermsRemaining": 0,
+  "rateAfterFixedPeriod": null,
   "priority": 1,
   "createdAt": "2026-02-13",
   "updatedAt": "2026-02-13"
 }
 ```
+
+**Fixed-rate support:** `fixedRateTermsRemaining` tracks how many months remain at the current fixed rate. When it reaches 0, `rateAfterFixedPeriod` (if set) becomes the new rate. For fully variable loans, `fixedRateTermsRemaining` is 0 and `rateAfterFixedPeriod` is null.
+
+### Rate Changes (Interest Rate History)
+
+```json
+{
+  "id": "uuid",
+  "loanId": "uuid",
+  "date": "2026-03-01",
+  "oldNominalRate": 4.5,
+  "newNominalRate": 4.75,
+  "oldEffectiveRate": 4.65,
+  "newEffectiveRate": 4.9,
+  "reason": "Norges Bank renteheving"
+}
+```
+
+Tracks every interest rate change per loan. Used to display rate history and understand how rates have evolved over time.
 
 ### Payments
 
